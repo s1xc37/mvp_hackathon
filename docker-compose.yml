@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:latest
+    container_name: asphalt_postgres
+    environment:
+      POSTGRES_USER: asphalt_postgres
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: asphalt_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asphalt_postgres -d asphalt_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: asphalt_backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://asphalt_postgres:1234@postgres:5432/asphalt_db
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+      DEBUG: "true"
+      CORS_ORIGINS: http://localhost:5173
+      OPENWEATHER_API_KEY: YOUR_KEY
+      TOMORROW_IO_API_KEY: fK404lmrZbyEOKFwhAdgLvMpABlipNC8
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: asphalt_frontend
+    environment:
+      VITE_API_URL: http://localhost:8000/api
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+
+volumes:
+  postgres_data:
