@@ -27,7 +27,7 @@ services:
       DEBUG: "true"
       CORS_ORIGINS: http://localhost:5173
       OPENWEATHER_API_KEY: YOUR_KEY
-      TOMORROW_IO_API_KEY: fK404lmrZbyEOKFwhAdgLvMpABlipNC8
+      TOMORROW_IO_API_KEY: YOUR_KEY
     ports:
       - "8000:8000"
     depends_on:
