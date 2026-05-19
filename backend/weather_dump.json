@@ -1,0 +1,91 @@
+[
+  {
+    "source": "openmeteo",
+    "points": [
+      {
+        "time": "2026-05-18T12:00:00+00:00",
+        "temp_c": 28.3,
+        "feels_like_c": 26.8,
+        "wind_ms": 12.2,
+        "wind_gust_ms": 33.1,
+        "precip_mm": 0.0,
+        "precip_probability": 0.0,
+        "humidity_pct": 26.0,
+        "pressure_hpa": 1013.6,
+        "cloudiness_pct": 98,
+        "description": "Пасмурно",
+        "has_precipitation": false
+      },
+      {
+        "time": "2026-05-18T13:00:00+00:00",
+        "temp_c": 29.2,
+        "feels_like_c": 27.3,
+        "wind_ms": 12.9,
+        "wind_gust_ms": 36.0,
+        "precip_mm": 0.0,
+        "precip_probability": 0.0,
+        "humidity_pct": 22.0,
+        "pressure_hpa": 1013.2,
+        "cloudiness_pct": 84,
+        "description": "Пасмурно",
+        "has_precipitation": false
+      },
+      {
+        "time": "2026-05-18T14:00:00+00:00",
+        "temp_c": 29.8,
+        "feels_like_c": 27.9,
+        "wind_ms": 12.1,
+        "wind_gust_ms": 36.0,
+        "precip_mm": 0.0,
+        "precip_probability": 0.0,
+        "humidity_pct": 20.0,
+        "pressure_hpa": 1013.0,
+        "cloudiness_pct": 83,
+        "description": "Пасмурно",
+        "has_precipitation": false
+      },
+      {
+        "time": "2026-05-18T15:00:00+00:00",
+        "temp_c": 30.1,
+        "feels_like_c": 28.2,
+        "wind_ms": 10.8,
+        "wind_gust_ms": 33.8,
+        "precip_mm": 0.0,
+        "precip_probability": 0.0,
+        "humidity_pct": 20.0,
+        "pressure_hpa": 1012.6,
+        "cloudiness_pct": 93,
+        "description": "Пасмурно",
+        "has_precipitation": false
+      },
+      {
+        "time": "2026-05-18T16:00:00+00:00",
+        "temp_c": 30.3,
+        "feels_like_c": 28.0,
+        "wind_ms": 10.3,
+        "wind_gust_ms": 30.6,
+        "precip_mm": 0.0,
+        "precip_probability": 0.0,
+        "humidity_pct": 21.0,
+        "pressure_hpa": 1012.4,
+        "cloudiness_pct": 62,
+        "description": "Переменная облачность",
+        "has_precipitation": false
+      },
+      {
+        "time": "2026-05-18T17:00:00+00:00",
+        "temp_c": 30.1,
+        "feels_like_c": 27.2,
+        "wind_ms": 10.5,
+        "wind_gust_ms": 28.8,
+        "precip_mm": 0.0,
+        "precip_probability": 0.0,
+        "humidity_pct": 19.0,
+        "pressure_hpa": 1012.0,
+        "cloudiness_pct": 52,
+        "description": "Переменная облачность",
+        "has_precipitation": false
+      }
+    ]
+  }
+]

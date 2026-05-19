@@ -1,0 +1,92 @@
+[
+  {
+    "id": "site-01",
+    "name": "Участок М-11 км 45",
+    "km_marker": 45,
+    "lat": 56.390318,
+    "lon": 36.571799,
+    "polygon": [
+      [56.386357, 36.575216],
+      [56.386231, 36.575442],
+      [56.394278, 36.568381],
+      [56.394404, 36.568155]
+    ],
+    "width_m": 7.5,
+    "length_m": 1000,
+    "layer_type": "standard",
+    "plant_id": "vysokovsky_avtodor_abz",
+    "delivery_time_min": 20
+  },
+  {
+    "id": "site-02",
+    "name": "Участок М-11 км 78",
+    "km_marker": 78,
+    "lat": 56.568796,
+    "lon": 36.478926,
+    "polygon": [
+      [56.564770, 36.481135],
+      [56.564644, 36.481361],
+      [56.572822, 36.476717],
+      [56.572948, 36.476491]
+    ],
+    "width_m": 7.5,
+    "length_m": 1000,
+    "layer_type": "standard",
+    "plant_id": "vysokovsky_avtodor_abz",
+    "delivery_time_min": 40
+  },
+  {
+    "id": "site-03",
+    "name": "Участок М-11 км 112",
+    "km_marker": 112,
+    "lat": 56.761401,
+    "lon": 36.207698,
+    "polygon": [
+      [56.758565, 36.213815],
+      [56.758439, 36.214041],
+      [56.764236, 36.201581],
+      [56.764362, 36.201355]
+    ],
+    "width_m": 7.0,
+    "length_m": 1000,
+    "layer_type": "thin",
+    "plant_id": "vysokovsky_avtodor_abz",
+    "delivery_time_min": 60
+  },
+  {
+    "id": "site-04",
+    "name": "Участок М-11 км 148",
+    "km_marker": 148,
+    "lat": 57.472149,
+    "lon": 34.349623,
+    "polygon": [
+      [57.469799, 34.356485],
+      [57.469673, 34.356711],
+      [57.474499, 34.342760],
+      [57.474625, 34.342534]
+    ],
+    "width_m": 7.5,
+    "length_m": 1000,
+    "layer_type": "standard",
+    "plant_id": "abz_1_tver_dmitrovskoe",
+    "delivery_time_min": 75
+  },
+  {
+    "id": "site-05",
+    "name": "Участок М-11 км 193",
+    "km_marker": 193,
+    "lat": 57.930603,
+    "lon": 33.928645,
+    "polygon": [
+      [57.929219, 33.932381],
+      [57.929093, 33.932607],
+      [57.931987, 33.924909],
+      [57.932113, 33.924683]
+    ],
+    "width_m": 7.0,
+    "length_m": 1000,
+    "layer_type": "thin",
+    "plant_id": "abz_1_tver_dmitrovskoe",
+    "delivery_time_min": 100
+  }
+]
