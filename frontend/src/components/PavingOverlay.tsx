@@ -217,6 +217,8 @@ export function CriticalAlertModal({ sim, routeInfo }: AlertModalProps) {
   if (!a) return null;
 
   const handle = (action: AlertAction) => () => sim.acknowledgeAlert(action);
+  
+  // if (a.reason === '🌡 Смесь критически остыла') return('')
 
   return (
     <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
