@@ -16,7 +16,7 @@ import PanelVehicle from '@/components/PanelVehicle';
 import LineInformation from '@/components/LineInformation';
 import MaintenancePanel from '@/components/MaintenancePanel';
 import ReroutePanel from '@/components/ReroutePanel';
-import { TruckMarker, PaverMarker, PavingControlPanel } from '@/components/PavingOverlay';
+import { TruckMarker, PaverMarker, PavingControlPanel, CriticalAlertModal } from '@/components/PavingOverlay';
 import MapTimeline from '@/components/MapTimeline';
 import { usePavingSimulation } from '@/hooks/usePavingSimulation';
 import { buildPavingRoute, completePaving, resetDemo } from '@/api/paving';
@@ -178,6 +178,16 @@ export default function MapPage() {
   const pavingLanesShare = pavingRoad && pavingLaneNums.length > 0
     ? Math.min(1, pavingLaneNums.length / Math.max(1, pavingRoad.lanes.length))
     : 1;
+  // Тоннаж под укладку: width × length × thickness × density × lanesShare
+  const pavingTotalT = pavingRoad
+    ? pavingRoad.width_m * pavingRoad.length_m * (pavingLayerType === 'thin' ? 0.03 : 0.05) * 2.3 * pavingLanesShare
+    : 0;
+  // Фактический заказ за окно — то что бэк рассчитал в logistics
+  const orderTotalT = pavingRoute?.logistics
+    ? pavingRoute.logistics.target_load_per_truck_t * pavingRoute.logistics.n_trucks * pavingRoute.logistics.trips_per_truck
+    : pavingTotalT;
+  const loadPerTruckT = pavingRoute?.logistics?.target_load_per_truck_t ?? 20;
+  const nTrucksLogi = pavingRoute?.logistics?.n_trucks ?? 0;
 
   const handlePavingDone = async () => {
     const roadId = pavingRoute?.road_id;
@@ -202,6 +212,12 @@ export default function MapPage() {
     pavingRepairHours,
     pavingDurationMin,
     pavingLanesShare,
+    pavingRoute?.prep?.mix_temp_start_c ?? 160,
+    pavingRoute?.prep?.cool_rate ?? 0.35,
+    pavingRoute?.prep?.cool_rate_waiting ?? 0.2,
+    orderTotalT,
+    loadPerTruckT,
+    nTrucksLogi,
     handlePavingDone,
     (t: Date) => checkForecast(t, pavingLayerType),
   );
@@ -290,10 +306,10 @@ export default function MapPage() {
   const flyToVehicle = (coords: [number, number]) => flyTo(coords, 16);
   const closePanel = () => { setPanel(null); cancelPolyEdit(); };
 
-  const startPaving = async (roadId: string, laneNums: number[], vehicleIds: number[]) => {
+  const startPaving = async (roadId: string, laneNums: number[], vehicleIds: number[], loadTPerTruck?: number) => {
     try {
       completedRef.current = null;
-      const data = await buildPavingRoute(roadId, vehicleIds);
+      const data = await buildPavingRoute(roadId, vehicleIds, undefined, loadTPerTruck);
       setPavingRoute(data);
       setPavingLaneNums(laneNums);
       setPavingVehicleIds(data.vehicles.map(v => v.vehicle_id));
@@ -434,7 +450,7 @@ export default function MapPage() {
               <Polyline geometry={paving.pavingTrail}
                 options={{ strokeColor: '#1f2937', strokeWidth: 8, strokeOpacity: 0.95, openBalloonOnClick: false, zIndex: 71 }} />
             )}
-            {mapReady && (paving.phase === 'to_plant' || paving.phase === 'loading') && paving.trucks.map(t => (
+            {mapReady && (paving.phase === 'to_plant' || paving.phase === 'loading' || paving.phase === 'delivery') && paving.trucks.map(t => (
               <TruckMarker key={`truck-${t.id}`}
                 coords={[t.lat, t.lon]}
                 heading={t.heading}
@@ -442,7 +458,7 @@ export default function MapPage() {
                 loadT={t.loadT}
                 capacityT={t.capacityT} />
             ))}
-            {mapReady && paving.truck && (paving.phase === 'delivery' || paving.phase === 'waiting_weather') && (
+            {mapReady && paving.truck && paving.phase === 'waiting_weather' && paving.trucks.length === 0 && (
               <TruckMarker
                 coords={[paving.truck.lat, paving.truck.lon]}
                 heading={paving.truck.heading}
@@ -482,7 +498,7 @@ export default function MapPage() {
             onFinishPolyEdit={finishPolyEdit}
             onCancelPolyEdit={cancelPolyEdit}
             onShowMaintenance={() => setShowMaintenance(true)}
-            onStartPaving={(laneNums, vehicleIds) => startPaving(roadPanel.data.id, laneNums, vehicleIds)}
+            onStartPaving={(laneNums, vehicleIds, loadT) => startPaving(roadPanel.data.id, laneNums, vehicleIds, loadT)}
             pavingActive={pavingRoute?.road_id === roadPanel.data?.id}
           />
         )}
@@ -493,6 +509,10 @@ export default function MapPage() {
             sim={paving}
             onClose={stopPaving}
             onReset={handleReset} />
+        )}
+
+        {pavingRoute && paving.criticalAlert && (
+          <CriticalAlertModal sim={paving} routeInfo={pavingRoute} />
         )}
 
         {vehiclePanel && (

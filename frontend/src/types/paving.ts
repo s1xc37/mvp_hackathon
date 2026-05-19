@@ -7,6 +7,23 @@ export interface VehiclePlan {
   to_plant_min: number;
   to_plant_km: number;
   capacity_t: number;
+  load_t: number;
+  departure_offset_min: number;
+}
+
+export interface LogisticsPlan {
+  total_demand_t: number;
+  target_load_per_truck_t: number;
+  max_load_per_trip_t: number;
+  trips_per_truck: number;
+  trips_total: number;
+  interval_min: number;
+  savings_t: number;
+  savings_pct: number;
+  bottleneck: 'window' | 'temperature' | 'capacity';
+  n_trucks: number;
+  truck_capacity_t: number;
+  arrival_temp_c: number;
 }
 
 export interface PrepBreakdown {
@@ -14,6 +31,18 @@ export interface PrepBreakdown {
   load_min: number;
   delivery_min: number;
   total_min: number;
+  mix_temp_start_c: number;
+  mix_temp_arrival_c: number;
+  mix_usable: boolean;
+  mix_optimal: boolean;
+  heated_share: number;
+  cool_rate: number;
+  cool_rate_waiting: number;
+  site_wait_min: number;
+  required_mix_temp_c: number;
+  drying_min: number;
+  air_temp_c: number | null;
+  wind_ms: number | null;
 }
 
 export interface BrigadeVehicle {
@@ -32,6 +61,7 @@ export interface AutoBrigadeResponse {
   plant_name: string;
   vehicles: BrigadeVehicle[];
   prep: PrepBreakdown;
+  logistics: LogisticsPlan | null;
 }
 
 export interface PavingRoute {
@@ -49,6 +79,7 @@ export interface PavingRoute {
   vehicles: VehiclePlan[];
   prep: PrepBreakdown;
   load_minutes: number;
+  logistics: LogisticsPlan | null;
 }
 
 export interface TruckTelemetry {

@@ -11,6 +11,7 @@ import { createPlan } from '@/api/plans';
 import { autoBrigade } from '@/api/paving';
 import { fmtTime } from '@/utils/time';
 import type { GreenWindow } from '@/types/greenWindow';
+import type { LogisticsPlan } from '@/types/paving';
 
 interface PolyEdit { roadId: string; points: [number, number][] }
 
@@ -23,7 +24,7 @@ interface Props {
   onFinishPolyEdit: () => void;
   onCancelPolyEdit: () => void;
   onShowMaintenance: () => void;
-  onStartPaving: (laneNums: number[], vehicleIds: number[]) => void;
+  onStartPaving: (laneNums: number[], vehicleIds: number[], loadTPerTruck?: number) => void;
   pavingActive: boolean;
 }
 
@@ -67,7 +68,15 @@ function VehicleSelector({ type, pool, selected, onAdd, onRemove }: VSelectorPro
     <div className="space-y-1">
       {selected.map(v => (
         <div key={v.id} className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-md px-2 py-1 gap-2">
-          <span className="text-xs font-medium text-gray-800 truncate">{v.name}</span>
+          <span className="text-xs font-medium text-gray-800 truncate flex items-center gap-1">
+            {v.name}
+            {v.type === 'dump_truck' && (
+              <span className={`text-[9px] font-bold px-1 rounded ${v.is_heated ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}
+                    title={v.is_heated ? 'Термокузов: 0.35°C/мин' : 'Обычный кузов: 0.7°C/мин'}>
+                {v.is_heated ? '🔥' : '❄'}
+              </span>
+            )}
+          </span>
           <button onClick={() => onRemove(v.id)} className="text-gray-300 hover:text-red-500 text-xs shrink-0">✕</button>
         </div>
       ))}
@@ -80,7 +89,7 @@ function VehicleSelector({ type, pool, selected, onAdd, onRemove }: VSelectorPro
         }}
           className="w-full text-xs border border-dashed border-gray-300 rounded-md px-2 py-1 text-gray-500 bg-white focus:outline-none focus:border-orange-400 cursor-pointer">
           <option value="">+ добавить {VEHICLE_TYPES.find(t => t.type === type)?.label.toLowerCase()}</option>
-          {available.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          {available.map(v => <option key={v.id} value={v.id}>{v.name}{v.type === 'dump_truck' && v.is_heated ? ' 🔥' : ''}</option>)}
         </select>
       )}
       {available.length === 0 && selected.length === 0 && (
@@ -105,6 +114,8 @@ export default function PanelRoad({ road, onClose, polyEdit, onStartPolyEdit, on
   const [selectedWindow, setSelectedWindow] = useState<string | null>(null);
   const [showVehicles, setShowVehicles] = useState(false);
   const [autoLoading, setAutoLoading] = useState(false);
+  const [logistics, setLogistics] = useState<LogisticsPlan | null>(null);
+  const [loadOverride, setLoadOverride] = useState<number | null>(null);
 
   const totalLanes = road.lanes.length;
   const selectedCount = mode === 'road' ? totalLanes : checkedLanes.size;
@@ -157,7 +168,7 @@ export default function PanelRoad({ road, onClose, polyEdit, onStartPolyEdit, on
   const handleStart = () => {
     const vehicleIds = Object.values(selectedVehicles).flat().map(v => v.id);
     const laneNums = mode === 'road' ? [] : Array.from(checkedLanes);
-    onStartPaving(laneNums, vehicleIds);
+    onStartPaving(laneNums, vehicleIds, loadOverride ?? undefined);
   };
 
   const handleAutoBrigade = async () => {
@@ -180,6 +191,10 @@ export default function PanelRoad({ road, onClose, polyEdit, onStartPolyEdit, on
       }
       setSelectedVehicles(next);
       setShowVehicles(true);
+      if (data.logistics) {
+        setLogistics(data.logistics);
+        setLoadOverride(data.logistics.target_load_per_truck_t);
+      }
     } catch (err) {
       console.error('autoBrigade:', err);
       alert('Не удалось подобрать технику автоматически');
@@ -314,6 +329,86 @@ export default function PanelRoad({ road, onClose, polyEdit, onStartPolyEdit, on
           )}
         </section>
 
+        {/* Order optimization */}
+        {logistics && logistics.n_trucks > 0 && (
+          <section className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-emerald-900 uppercase tracking-wider">🎯 Заказ смеси</h3>
+              {logistics.savings_t > 0 && (
+                <span className="text-[10px] font-bold text-emerald-700 bg-white border border-emerald-300 px-2 py-0.5 rounded-full">
+                  −{logistics.savings_t.toFixed(0)} т ({logistics.savings_pct.toFixed(0)}%)
+                </span>
+              )}
+            </div>
+
+            <div className="bg-white rounded-md p-2 border border-emerald-100 mb-2">
+              <div className="flex items-baseline justify-between">
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase">Рекомендация</p>
+                  <p className="text-lg font-bold text-emerald-700">
+                    {(loadOverride ?? logistics.target_load_per_truck_t).toFixed(1)} <span className="text-xs font-normal text-gray-500">т / фура</span>
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-gray-500 uppercase">Всего</p>
+                  <p className="text-sm font-bold text-gray-800">
+                    {((loadOverride ?? logistics.target_load_per_truck_t) * logistics.n_trucks * logistics.trips_per_truck).toFixed(0)} т
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    {logistics.n_trucks} ф. × {logistics.trips_per_truck} рейс. · конвейер {logistics.interval_min.toFixed(0)} мин
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[10px] text-gray-600">
+                <span>Загрузка на фуру:</span>
+                <span className="font-mono">
+                  5 т ←→ {logistics.truck_capacity_t.toFixed(0)} т (кузов)
+                </span>
+              </div>
+              <input
+                type="range"
+                min={5}
+                max={logistics.truck_capacity_t}
+                step={0.5}
+                value={loadOverride ?? logistics.target_load_per_truck_t}
+                onChange={e => setLoadOverride(parseFloat(e.target.value))}
+                className="w-full accent-emerald-600"
+              />
+              <div className="flex items-center justify-between text-[10px]">
+                <button
+                  onClick={() => setLoadOverride(logistics.target_load_per_truck_t)}
+                  className="text-emerald-700 hover:text-emerald-900 underline">
+                  ← сбросить на оптимум
+                </button>
+                <span className="text-gray-500">
+                  T прибытия: <strong className={logistics.arrival_temp_c < 140 ? 'text-red-600' : 'text-emerald-700'}>
+                    {logistics.arrival_temp_c.toFixed(0)}°C
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            {logistics.bottleneck === 'temperature' && (
+              <p className="text-[10px] text-amber-700 mt-1.5 font-semibold">
+                ⚠ Узкое место: температура. Лишняя смесь остынет в кузове.
+              </p>
+            )}
+            {logistics.bottleneck === 'capacity' && (
+              <p className="text-[10px] text-gray-500 mt-1.5">
+                Узкое место: вместимость фуры — можно везти полную загрузку.
+              </p>
+            )}
+            {logistics.bottleneck === 'window' && (
+              <p className="text-[10px] text-gray-500 mt-1.5">
+                Узкое место: длительность окна.
+              </p>
+            )}
+          </section>
+        )}
+
         {/* Action buttons */}
         <section className="grid grid-cols-2 gap-2">
           <button onClick={() => setShowWeather(true)}
@@ -327,10 +422,6 @@ export default function PanelRoad({ road, onClose, polyEdit, onStartPolyEdit, on
           <button onClick={() => setShowCalc(true)}
             className="flex items-center justify-center gap-1.5 py-2 rounded-xl bg-purple-50 border border-purple-200 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors">
             <span>🧮</span><span>Калькулятор</span>
-          </button>
-          <button onClick={onShowMaintenance}
-            className="flex items-center justify-center gap-1.5 py-2 rounded-xl bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-700 text-xs font-semibold transition-colors">
-            <span>🔧</span><span>План ТО</span>
           </button>
         </section>
 

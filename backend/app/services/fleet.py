@@ -21,6 +21,7 @@ def _vehicle_summary(v: VehicleORM) -> VehicleSummary:
         home_id=_cast_home_id(v.home_id),
         capacity_t=v.capacity_t or 0.0,
         load_t=v.load_t or 0.0,
+        is_heated=bool(v.is_heated),
     )
 
 
@@ -38,6 +39,7 @@ def _vehicle_full(v: VehicleORM) -> Vehicle:
         home_id=_cast_home_id(v.home_id),
         capacity_t=v.capacity_t or 0.0,
         load_t=v.load_t or 0.0,
+        is_heated=bool(v.is_heated),
         schedule=[ScheduleEntry(**e) for e in (v.schedule or [])],
     )
 

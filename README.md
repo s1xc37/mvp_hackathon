@@ -23,7 +23,7 @@ docker compose up -d --build
 - Swagger: <http://localhost:8000/docs>
 - Postgres: `localhost:5432` (user `asphalt_postgres`, pass `1234`, db `asphalt_db`)
 
-> На macOS используй именно `localhost` (или `127.0.0.1`). Curl с IPv6 (`::1`) Docker Desktop не пробрасывает — будет ложный 404.
+> На macOS используйте именно `localhost` (или `127.0.0.1`). Curl с IPv6 (`::1`) Docker Desktop не пробрасывает — будет ложный 404.
 
 ## Управление контейнерами
 

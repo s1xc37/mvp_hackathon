@@ -4,14 +4,17 @@ from sqlalchemy.orm import Session
 
 from app.core.data_utils import get_site_by_id, load_sites
 from app.core.deps import get_http_client
-from app.core.geo import haversine_km
 from app.db.database import SessionLocal
 from app.db.models import PlantORM, SiteORM
 from app.schemas.green_window import BrigadeMember, GreenWindow, PrepInfo
 from app.services import weather_aggregator
 from app.services.dispatch import select_brigade, select_nearest_plant, vehicles_by_ids
 from app.services.green_window import calculate_green_windows
-from app.services.prep import calc_prep_breakdown, fallback_prep_breakdown
+from app.services.osrm import fetch_table
+from app.services.prep import (
+    calc_prep_breakdown_async,
+    fallback_prep_breakdown,
+)
 
 router = APIRouter(prefix="/api/green-windows", tags=["green-windows"])
 
@@ -53,7 +56,7 @@ async def get_green_window(
     )
 
     site_orm = db.query(SiteORM).filter(SiteORM.id == site_id).first()
-    delivery_min = site_orm.delivery_time_min if site_orm else 0
+    delivery_fallback_min = site_orm.delivery_time_min if site_orm else 0
 
     # Завод: захардкоженный → ближайший
     plant: PlantORM | None = None
@@ -62,7 +65,7 @@ async def get_green_window(
     if plant is None and site_orm:
         plant = select_nearest_plant(site_orm.lat, site_orm.lon, db)
 
-    # Бригада: явно переданная → авто (если auto=true) → пусто
+    # Бригада
     ids: list[int] = []
     if vehicle_ids:
         try:
@@ -76,30 +79,52 @@ async def get_green_window(
     elif auto and site_orm:
         brigade_orm = select_brigade(site_orm.lat, site_orm.lon, site_orm.repair_hours or 72, db)
 
-    # Prep breakdown
-    if brigade_orm and plant:
-        prep_dict = calc_prep_breakdown(brigade_orm, plant.lat, plant.lon, delivery_min)
+    # Текущая погода для расчёта остывания (берём первую точку прогноза)
+    first = forecast.points[0] if forecast.points else None
+    air_temp_c = first.temp_c if first else None
+    wind_ms = first.wind_ms if first else None
+    # Накопленные осадки за ближайшие 24 часа (для просушки)
+    rain_24h_mm = sum(p.precip_mm for p in forecast.points[:24]) if forecast.points else 0.0
+
+    # Prep — теперь с OSRM, температурой и погодой
+    if brigade_orm and plant and site_orm:
+        prep_dict = await calc_prep_breakdown_async(
+            brigade_orm, plant, site_orm.lat, site_orm.lon, client,
+            air_temp_c=air_temp_c, wind_ms=wind_ms, rain_mm_per_day=rain_24h_mm,
+        )
         has_brigade = True
     else:
-        prep_dict = fallback_prep_breakdown(delivery_min)
+        prep_dict = fallback_prep_breakdown(delivery_fallback_min)
         has_brigade = False
 
     prep = PrepInfo(**prep_dict, has_brigade=has_brigade)
 
+    # Бригада: время до АБЗ через OSRM table
     brigade_out: list[BrigadeMember] = []
-    if plant:
+    if plant and brigade_orm:
+        truck_pts = [tuple(v.coords) for v in brigade_orm if v.coords]
+        table = await fetch_table(
+            client, sources=truck_pts, destinations=[(plant.lat, plant.lon)],
+        )
+        durs = [row[0] for row in table["durations_min"]]
+        dists = [row[0] for row in table["distances_km"]]
+        idx = 0
         for v in brigade_orm:
-            km = haversine_km(v.coords[0], v.coords[1], plant.lat, plant.lon) if v.coords else 0.0
+            if not v.coords:
+                continue
             brigade_out.append(BrigadeMember(
                 id=v.id,
                 type=v.type.value,
                 name=v.name,
-                to_plant_km=round(km, 2),
-                to_plant_min=round(km / 60 * 60, 1),
+                to_plant_km=round(dists[idx], 2),
+                to_plant_min=round(durs[idx], 1),
                 capacity_t=v.capacity_t or 0.0,
+                is_heated=bool(v.is_heated),
             ))
+            idx += 1
 
     return calculate_green_windows(
         site_schema, forecast.points, prep=prep, brigade=brigade_out,
         plant_name=plant.name if plant else None,
+        plant_capacity_t_per_hour=plant.capacity_t_per_hour if plant else None,
     )

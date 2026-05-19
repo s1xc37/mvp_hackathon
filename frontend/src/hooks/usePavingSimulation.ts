@@ -18,6 +18,21 @@ export interface TruckSnap extends VehicleSnapshot {
   capacityT: number;
 }
 
+export type AlertReason = 'cold_mix' | 'bad_weather' | 'both';
+export type AlertAction = 'utilize' | 'reroute' | 'wait';
+
+export interface CriticalAlert {
+  reason: AlertReason;
+  mixTempC: number;
+  weatherBad: boolean;
+  startedOutsideWindow: boolean;
+  pavingPct: number;       // 0..1 — прогресс укладки
+  orderTotalT: number;     // фактический заказ за окно
+  pavedT: number;          // уложено из заказа
+  inTrucksT: number;       // сейчас горячая смесь в пути (риск утилизации)
+  notDeliveredT: number;   // не выехали с АБЗ (можно безопасно отменить)
+}
+
 export interface PavingState {
   phase: PavingPhase;
   trucks: TruckSnap[];
@@ -30,6 +45,10 @@ export interface PavingState {
   pavingTrail: [number, number][];
   pavingProgress: number;
   overallProgress: number;
+  mixTempC: number;          // текущая температура смеси (фазы loading/delivery/paving)
+  mixTempArrivalC: number;   // прогноз: какой приедет на участок
+  mixUsable: boolean;        // ≥ 140°C
+  criticalAlert: CriticalAlert | null;
   error: string | null;
 }
 
@@ -45,8 +64,15 @@ const INITIAL: PavingState = {
   pavingTrail: [],
   pavingProgress: 0,
   overallProgress: 0,
+  mixTempC: 0,
+  mixTempArrivalC: 0,
+  mixUsable: true,
+  criticalAlert: null,
   error: null,
 };
+
+const MIX_USABLE_MIN_C = 140;
+const MIX_PAVING_MIN_C = 80; // ниже — уплотнение невозможно по ГОСТ 3.3.22
 
 // Distribution of overall progress across phases
 const P_TO_PLANT = 0.10;
@@ -80,6 +106,10 @@ function interpolate(pts: [number, number][], t: number, speedKmh: number): Vehi
   };
 }
 
+function effectiveLoad(v: VehiclePlan): number {
+  return v.load_t > 0 ? v.load_t : v.capacity_t;
+}
+
 function buildTruckSnaps(
   vehicles: VehiclePlan[],
   t: number,
@@ -99,10 +129,41 @@ function buildTruckSnaps(
         id: v.vehicle_id,
         name: v.vehicle_name,
         type: v.vehicle_type,
-        loadT: v.capacity_t * loadFrac,
+        loadT: effectiveLoad(v) * loadFrac,
         capacityT: v.capacity_t,
       };
     });
+}
+
+// Конвейер на маршруте АБЗ→участок: каждая фура стартует с departure_offset_min задержкой.
+function buildDeliverySnaps(
+  vehicles: VehiclePlan[],
+  route: [number, number][],
+  elapsedSimMin: number,
+  totalSimMin: number,
+): TruckSnap[] {
+  if (route.length < 2) return [];
+  return vehicles
+    .filter(v => HAULER_TYPES.has(v.vehicle_type))
+    .map(v => {
+      const tRaw = (elapsedSimMin - v.departure_offset_min) / totalSimMin;
+      const t = Math.max(0, Math.min(1, tRaw));
+      const visible = tRaw > 0;
+      const snap = interpolate(route, t, visible ? TRUCK_DISPLAY_KMH : 0);
+      return {
+        ...snap,
+        id: v.vehicle_id,
+        name: v.vehicle_name,
+        type: v.vehicle_type,
+        loadT: visible ? effectiveLoad(v) : 0,
+        capacityT: v.capacity_t,
+      };
+    })
+    .filter(s => s.loadT > 0 || elapsedSimMin > 0);
+}
+
+export interface PavingSim extends PavingState {
+  acknowledgeAlert: (action: AlertAction) => void;
 }
 
 export function usePavingSimulation(
@@ -115,9 +176,15 @@ export function usePavingSimulation(
   repairHours: number,
   deliveryDurationMin: number,
   lanesShare: number,
+  mixStartC: number,             // T смеси на выходе с АБЗ
+  coolRate: number,              // °C/мин в кузове
+  coolRateWaiting: number,       // °C/мин на участке/в укладчике
+  orderTotalT: number,           // фактический заказ за окно (n × load × trips)
+  loadPerTruckT: number,         // загрузка одного рейса
+  nTrucks: number,               // количество фур-перевозчиков
   onDone: () => void,
   isSuitable: (t: Date) => boolean,
-): PavingState {
+): PavingSim {
   const { simNow } = useSimClock();
   const [state, setState] = useState<PavingState>(INITIAL);
 
@@ -135,6 +202,9 @@ export function usePavingSimulation(
   const onDoneRef = useRef(onDone);
   const isSuitableRef = useRef(isSuitable);
   const vehiclesRef = useRef<VehiclePlan[]>(vehicles);
+  const startedOutsideWindowRef = useRef(false);
+  const alertFiredRef = useRef(false);
+  const mixTempRef = useRef(0);
   onDoneRef.current = onDone;
   isSuitableRef.current = isSuitable;
   vehiclesRef.current = vehicles;
@@ -163,13 +233,21 @@ export function usePavingSimulation(
     deliveryElapsedRef.current = 0;
     pavingElapsedRef.current = 0;
     doneFiredRef.current = false;
+    alertFiredRef.current = false;
+    // Запомним: запустили ли в годное окно (если nope — это форс-мажор)
+    startedOutsideWindowRef.current = !isSuitable(simNow);
     prevSimRef.current = simNow.getTime();
+    mixTempRef.current = mixStartC;
 
+    const arrivalC = mixStartC - coolRate * deliveryDurationMin;
     setState({
       ...INITIAL,
       phase: phaseRef.current,
       trucks: buildTruckSnaps(vehicles, 0, hasToPlant, 0),
       truck: interpolate(route, 0, 0),
+      mixTempC: mixStartC,
+      mixTempArrivalC: Math.round(arrivalC * 10) / 10,
+      mixUsable: arrivalC >= MIX_USABLE_MIN_C,
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, route, pavingPath]);
@@ -238,6 +316,47 @@ export function usePavingSimulation(
       const trailIdx = Math.min(Math.floor(t * (route.length - 1)), route.length - 1);
       const trail: [number, number][] = [...route.slice(0, trailIdx), [snap.lat, snap.lon]];
 
+      const elapsedSimMin = (deliveryElapsedRef.current / T_delivRef.current) * deliveryDurationMin;
+      const currentMixC = mixStartC - coolRate * elapsedSimMin;
+      mixTempRef.current = currentMixC;
+
+      const convoy = buildDeliverySnaps(
+        vehiclesRef.current, route, elapsedSimMin, deliveryDurationMin,
+      );
+
+      const weatherBad = !isSuitableRef.current(simNow);
+      const tooCold = currentMixC < MIX_USABLE_MIN_C;
+      if ((tooCold || weatherBad) && !alertFiredRef.current) {
+        alertFiredRef.current = true;
+        phaseRef.current = 'waiting_weather';
+        // В фазе delivery ещё ничего не уложено. Часть фур (та что выехала) везёт смесь.
+        const trucksOnRoad = Math.min(nTrucks, Math.max(1, Math.ceil(t * nTrucks)));
+        const inTrucksT = trucksOnRoad * loadPerTruckT;
+        const notDeliveredT = Math.max(0, orderTotalT - inTrucksT);
+        const alert: CriticalAlert = {
+          reason: tooCold && weatherBad ? 'both' : tooCold ? 'cold_mix' : 'bad_weather',
+          mixTempC: Math.round(currentMixC * 10) / 10,
+          weatherBad,
+          startedOutsideWindow: startedOutsideWindowRef.current,
+          pavingPct: 0,
+          orderTotalT: Math.round(orderTotalT * 10) / 10,
+          pavedT: 0,
+          inTrucksT: Math.round(inTrucksT * 10) / 10,
+          notDeliveredT: Math.round(notDeliveredT * 10) / 10,
+        };
+        setState(s => ({
+          ...s,
+          phase: 'waiting_weather',
+          truck: snap,
+          truckTrail: trail,
+          deliveryProgress: t,
+          mixTempC: Math.round(currentMixC * 10) / 10,
+          mixUsable: !tooCold,
+          criticalAlert: alert,
+        }));
+        return;
+      }
+
       if (t >= 1) {
         phaseRef.current = isSuitableRef.current(simNow) ? 'paving' : 'waiting_weather';
         pavingElapsedRef.current = 0;
@@ -249,30 +368,70 @@ export function usePavingSimulation(
           trucks: [],
           deliveryProgress: 1,
           overallProgress: P_TO_PLANT + P_LOADING + P_DELIVERY,
+          mixTempC: Math.round(currentMixC * 10) / 10,
+          mixUsable: currentMixC >= MIX_USABLE_MIN_C,
         }));
       } else {
         setState(s => ({
           ...s,
           truck: snap,
           truckTrail: trail,
+          trucks: convoy,
           deliveryProgress: t,
           overallProgress: P_TO_PLANT + P_LOADING + t * P_DELIVERY,
+          mixTempC: Math.round(currentMixC * 10) / 10,
+          mixUsable: currentMixC >= MIX_USABLE_MIN_C,
         }));
       }
     } else if (phase === 'paving') {
       if (!pavingPath || pavingPath.length < 2) return;
-
-      if (!isSuitableRef.current(simNow)) {
-        phaseRef.current = 'waiting_weather';
-        setState(s => ({ ...s, phase: 'waiting_weather' }));
-        return;
-      }
 
       pavingElapsedRef.current += dt;
       const t = Math.min(1, pavingElapsedRef.current / T_pavRef.current);
       const snap = interpolate(pavingPath, t, PAVER_DISPLAY_KMH);
       const trailIdx = Math.min(Math.floor(t * (pavingPath.length - 1)), pavingPath.length - 1);
       const trail: [number, number][] = [...pavingPath.slice(0, trailIdx), [snap.lat, snap.lon]];
+
+      // Остывание во время укладки (медленнее чем в кузове? нет — на участке быстрее).
+      // dt относится к T_pavRef. Сколько виртуальных минут прошло:
+      const pavingDurationMin = T_pavRef.current / (60 * 1000);
+      const elapsedPavMin = (pavingElapsedRef.current / T_pavRef.current) * pavingDurationMin;
+      // mixTempRef.current — температура на момент входа в paving. Падает по coolRateWaiting.
+      const currentMixC = mixTempRef.current - coolRateWaiting * elapsedPavMin;
+
+      const weatherBad = !isSuitableRef.current(simNow);
+      const tooCold = currentMixC < MIX_USABLE_MIN_C;
+      if ((tooCold || weatherBad) && !alertFiredRef.current) {
+        alertFiredRef.current = true;
+        phaseRef.current = 'waiting_weather';
+        const paved = orderTotalT * t;
+        const remaining = Math.max(0, orderTotalT - paved);
+        // Сейчас в фурах в пути — максимум один цикл конвейера (n_trucks × load)
+        const inTrucks = Math.min(remaining, nTrucks * loadPerTruckT);
+        const notDelivered = Math.max(0, remaining - inTrucks);
+        const alert: CriticalAlert = {
+          reason: tooCold && weatherBad ? 'both' : tooCold ? 'cold_mix' : 'bad_weather',
+          mixTempC: Math.round(currentMixC * 10) / 10,
+          weatherBad,
+          startedOutsideWindow: startedOutsideWindowRef.current,
+          pavingPct: t,
+          orderTotalT: Math.round(orderTotalT * 10) / 10,
+          pavedT: Math.round(paved * 10) / 10,
+          inTrucksT: Math.round(inTrucks * 10) / 10,
+          notDeliveredT: Math.round(notDelivered * 10) / 10,
+        };
+        setState(s => ({
+          ...s,
+          phase: 'waiting_weather',
+          paver: snap,
+          pavingTrail: trail,
+          pavingProgress: t,
+          mixTempC: Math.round(currentMixC * 10) / 10,
+          mixUsable: !tooCold,
+          criticalAlert: alert,
+        }));
+        return;
+      }
 
       setState(s => ({
         ...s,
@@ -281,6 +440,8 @@ export function usePavingSimulation(
         pavingTrail: trail,
         pavingProgress: t,
         overallProgress: P_TO_PLANT + P_LOADING + P_DELIVERY + t * P_PAVING,
+        mixTempC: Math.round(currentMixC * 10) / 10,
+        mixUsable: !tooCold,
       }));
 
       if (t >= 1) {
@@ -292,7 +453,18 @@ export function usePavingSimulation(
         }
       }
     } else if (phase === 'waiting_weather') {
-      if (isSuitableRef.current(simNow)) {
+      // В waiting_weather смесь продолжает стынуть (в кузове и в шнеке)
+      const wMin = (dt / 60000);
+      const newMix = mixTempRef.current - coolRateWaiting * wMin;
+      mixTempRef.current = newMix;
+      setState(s => ({
+        ...s,
+        mixTempC: Math.round(newMix * 10) / 10,
+        mixUsable: newMix >= MIX_USABLE_MIN_C,
+      }));
+
+      // Авто-возврат к работе только если алерт не висит
+      if (!alertFiredRef.current && isSuitableRef.current(simNow) && newMix >= MIX_USABLE_MIN_C) {
         const delivDone = deliveryElapsedRef.current >= T_delivRef.current;
         phaseRef.current = delivDone ? 'paving' : 'delivery';
         setState(s => ({ ...s, phase: phaseRef.current }));
@@ -300,5 +472,30 @@ export function usePavingSimulation(
     }
   }, [simNow, route, pavingPath]);
 
-  return state;
+  const acknowledgeAlert = (action: AlertAction) => {
+    if (action === 'utilize') {
+      phaseRef.current = 'error';
+      setState(s => ({
+        ...s,
+        phase: 'error',
+        criticalAlert: null,
+        error: `Смесь утилизирована по решению оператора (T=${s.mixTempC.toFixed(0)}°C).`,
+      }));
+    } else if (action === 'reroute') {
+      phaseRef.current = 'error';
+      setState(s => ({
+        ...s,
+        phase: 'error',
+        criticalAlert: null,
+        error: 'Бригада перенаправлена на другой участок. Текущая укладка остановлена.',
+      }));
+      // onDoneRef не вызываем — это не успешное завершение
+    } else if (action === 'wait') {
+      // Продолжаем стынуть; сбрасываем триггер, чтобы алерт мог вылететь снова если станет хуже
+      alertFiredRef.current = false;
+      setState(s => ({ ...s, criticalAlert: null }));
+    }
+  };
+
+  return { ...state, acknowledgeAlert };
 }

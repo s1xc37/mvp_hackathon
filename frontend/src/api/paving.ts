@@ -1,11 +1,17 @@
 import { api } from './client';
 import type { PavingRoute, PavingCompleteResponse, AutoBrigadeResponse } from '@/types/paving';
 
-export const buildPavingRoute = (roadId: string, vehicleIds?: number[], plantId?: string) =>
+export const buildPavingRoute = (
+  roadId: string,
+  vehicleIds?: number[],
+  plantId?: string,
+  loadTPerTruck?: number,
+) =>
   api.post<PavingRoute>('/paving/route', {
     road_id: roadId,
     plant_id: plantId,
     vehicle_ids: vehicleIds && vehicleIds.length > 0 ? vehicleIds : null,
+    load_t_per_truck: loadTPerTruck && loadTPerTruck > 0 ? loadTPerTruck : null,
   }).then(r => r.data);
 
 export const autoBrigade = (roadId: string) =>

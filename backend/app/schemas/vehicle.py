@@ -24,6 +24,7 @@ class VehicleSummary(BaseModel):
     home_id: int | str | None = None
     capacity_t: float = 0.0
     load_t: float = 0.0
+    is_heated: bool = False
 
 
 class Vehicle(VehicleSummary):

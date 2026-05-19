@@ -119,6 +119,7 @@ class VehicleORM(Base):
     home_id = Column(String, nullable=True)
     capacity_t = Column(Float, default=0.0, nullable=False)
     load_t = Column(Float, default=0.0, nullable=False)
+    is_heated = Column(Boolean, default=False, nullable=False)
     schedule = Column(JSON, default=list)
 
 

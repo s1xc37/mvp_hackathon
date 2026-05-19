@@ -16,6 +16,7 @@ from app.schemas.paving import (
     AutoBrigadeRequest,
     AutoBrigadeResponse,
     BrigadeVehicle,
+    LogisticsPlan,
     PavingCompleteRequest,
     PavingCompleteResponse,
     PavingRouteRequest,
@@ -23,10 +24,26 @@ from app.schemas.paving import (
     PrepBreakdown,
     VehiclePlan,
 )
+from app.core.constants import (
+    ASPHALT_DENSITY,
+    LAYER_THICKNESS_STANDARD,
+    LAYER_THICKNESS_THIN,
+)
+from app.services import weather_aggregator
 from app.services.centerline import compute_centerline
-from app.services.dispatch import select_brigade, select_nearest_plant, vehicles_by_ids
-from app.services.osrm import fetch_route
-from app.services.prep import LOAD_MINUTES as _LOAD_MINUTES, calc_prep_breakdown
+from app.services.logistics import calc_optimal_order
+from app.services.dispatch import (
+    select_best_plant,
+    select_brigade,
+    select_nearest_plant,
+    vehicles_by_ids,
+)
+from app.services.osrm import fetch_route, fetch_table
+from app.services.prep import (
+    LOAD_MINUTES as _LOAD_MINUTES,
+    calc_prep_breakdown,
+    calc_prep_breakdown_async,
+)
 
 # Типы техники, которые реально едут по дорогам через OSRM
 _OSRM_TYPES = {VehicleType.dump_truck, VehicleType.transfer_machine}
@@ -80,14 +97,16 @@ async def build_route(
     if not site:
         raise HTTPException(status_code=404, detail="Участок не найден")
 
-    # 1. Завод: явный → site.plant_id → ближайший
+    # 1. Завод: явный → лучший по OSRM+остыванию → закреплённый → ближайший
     plant: PlantORM | None = None
     if req.plant_id:
         plant = db.query(PlantORM).filter(PlantORM.id == req.plant_id).first()
-    elif site.plant_id:
-        plant = db.query(PlantORM).filter(PlantORM.id == site.plant_id).first()
-    if plant is None:
-        plant = select_nearest_plant(site.lat, site.lon, db)
+    else:
+        plant, _ = await select_best_plant(site.lat, site.lon, db, client)
+        if plant is None and site.plant_id:
+            plant = db.query(PlantORM).filter(PlantORM.id == site.plant_id).first()
+        if plant is None:
+            plant = select_nearest_plant(site.lat, site.lon, db)
     if plant is None:
         raise HTTPException(status_code=404, detail="Не найден активный АБЗ")
 
@@ -97,16 +116,56 @@ async def build_route(
     else:
         brigade = select_brigade(site.lat, site.lon, site.repair_hours or 72, db)
 
-    # 3. Маршруты: общий завод→участок + индивидуальные машина→завод
-    main_route, *vehicle_plans = await asyncio.gather(
+    # Погода на участке (для остывания)
+    forecast = await weather_aggregator.get_forecast(site.id, site.lat, site.lon, client)
+    first = forecast.points[0] if forecast.points else None
+    air_temp_c = first.temp_c if first else None
+    wind_ms = first.wind_ms if first else None
+    rain_24h = sum(p.precip_mm for p in forecast.points[:24]) if forecast.points else 0.0
+
+    # 3. Маршруты: общий завод→участок + индивидуальные машина→завод + prep с OSRM/погодой
+    main_route, prep_dict, *vehicle_plans = await asyncio.gather(
         fetch_route(client, plant.lat, plant.lon, site.lat, site.lon),
+        calc_prep_breakdown_async(
+            brigade, plant, site.lat, site.lon, client,
+            air_temp_c=air_temp_c, wind_ms=wind_ms, rain_mm_per_day=rain_24h,
+        ),
         *[_build_vehicle_plan(v, plant, client) for v in brigade],
     )
     paving_path, paving_length_m = compute_centerline(site.polygon, samples=24)
 
-    prep_dict = calc_prep_breakdown(
-        brigade, plant.lat, plant.lon, site.delivery_time_min or 0,
+    # 4. Логистика: оптимальная загрузка фуры с учётом окна и остывания
+    thickness = LAYER_THICKNESS_THIN if site.layer_type.value == "thin" else LAYER_THICKNESS_STANDARD
+    rate_t_per_min = site.width_m * 2.5 * thickness * ASPHALT_DENSITY  # PAVING_SPEED_AVG=2.5
+    # За одно «окно» считаем стандартную 8ч смену либо время полного ремонта (что меньше).
+    effective_window_min = min((site.repair_hours or 72) * 60, 8 * 60)
+    haulers = [vp for vp in vehicle_plans if vp.vehicle_type in ("dump_truck", "transfer_machine")]
+    n_haulers = len(haulers)
+    truck_cap = (
+        sum(vp.capacity_t for vp in haulers) / n_haulers if n_haulers else 20.0
     )
+    logistics_dict = calc_optimal_order(
+        rate_t_per_min=rate_t_per_min,
+        effective_paving_min=effective_window_min,
+        mix_temp_c=plant.mix_temp_c,
+        cool_rate=prep_dict["cool_rate"],
+        cool_rate_waiting=prep_dict.get("cool_rate_waiting", 0.2),
+        delivery_min=prep_dict["delivery_min"],
+        n_trucks=n_haulers,
+        truck_capacity_t=truck_cap,
+    )
+    # 5. Проставляем рекомендованную загрузку и offset конвейера в каждый VehiclePlan
+    override = req.load_t_per_truck
+    target_load = override if override and override > 0 else logistics_dict["target_load_per_truck_t"]
+    interval = logistics_dict["interval_min"]
+    final_plans: list[VehiclePlan] = []
+    hauler_idx = 0
+    for vp in vehicle_plans:
+        if vp.vehicle_type in ("dump_truck", "transfer_machine"):
+            vp.load_t = min(target_load, vp.capacity_t)
+            vp.departure_offset_min = hauler_idx * interval
+            hauler_idx += 1
+        final_plans.append(vp)
 
     return PavingRouteResponse(
         road_id=site.id,
@@ -120,23 +179,26 @@ async def build_route(
         source=main_route["source"],
         paving_path=paving_path,
         paving_length_m=round(paving_length_m, 1),
-        vehicles=list(vehicle_plans),
+        vehicles=final_plans,
         prep=PrepBreakdown(**prep_dict),
         load_minutes=_LOAD_MINUTES,
+        logistics=LogisticsPlan(**logistics_dict),
     )
 
 
 @router.post("/auto-brigade", response_model=AutoBrigadeResponse)
-def auto_brigade(
+async def auto_brigade(
     req: AutoBrigadeRequest,
+    client: httpx.AsyncClient = Depends(get_http_client),
     db: Session = Depends(_get_db),
 ) -> AutoBrigadeResponse:
     site = db.query(SiteORM).filter(SiteORM.id == req.road_id).first()
     if not site:
         raise HTTPException(status_code=404, detail="Участок не найден")
 
-    plant: PlantORM | None = None
-    if site.plant_id:
+    # АБЗ: лучший с учётом OSRM и остывания, иначе закреплённый, иначе ближайший
+    plant, _ = await select_best_plant(site.lat, site.lon, db, client)
+    if plant is None and site.plant_id:
         plant = db.query(PlantORM).filter(PlantORM.id == site.plant_id).first()
     if plant is None:
         plant = select_nearest_plant(site.lat, site.lon, db)
@@ -144,14 +206,35 @@ def auto_brigade(
         raise HTTPException(status_code=404, detail="Не найден активный АБЗ")
 
     brigade = select_brigade(site.lat, site.lon, site.repair_hours or 72, db)
-    prep_dict = calc_prep_breakdown(brigade, plant.lat, plant.lon, site.delivery_time_min or 0)
+
+    forecast = await weather_aggregator.get_forecast(site.id, site.lat, site.lon, client)
+    first = forecast.points[0] if forecast.points else None
+    air_temp_c = first.temp_c if first else None
+    wind_ms = first.wind_ms if first else None
+    rain_24h = sum(p.precip_mm for p in forecast.points[:24]) if forecast.points else 0.0
+
+    prep_dict = await calc_prep_breakdown_async(
+        brigade, plant, site.lat, site.lon, client,
+        air_temp_c=air_temp_c, wind_ms=wind_ms, rain_mm_per_day=rain_24h,
+    )
+
+    # OSRM table для всех фур к АБЗ одним запросом
+    truck_pts = [tuple(v.coords) for v in brigade if v.coords]
+    table = await fetch_table(
+        client, sources=truck_pts, destinations=[(plant.lat, plant.lon)],
+    )
+    durs = [row[0] for row in table["durations_min"]]
+    dists = [row[0] for row in table["distances_km"]]
 
     out_vehicles: list[BrigadeVehicle] = []
+    idx = 0
     for v in brigade:
         if v.coords:
-            km = haversine_km(v.coords[0], v.coords[1], plant.lat, plant.lon)
+            km = dists[idx] if idx < len(dists) else 0.0
+            mins = durs[idx] if idx < len(durs) else 0.0
+            idx += 1
         else:
-            km = 0.0
+            km, mins = 0.0, 0.0
         out_vehicles.append(BrigadeVehicle(
             id=v.id,
             type=v.type.value,
@@ -159,8 +242,26 @@ def auto_brigade(
             coords=v.coords,
             capacity_t=v.capacity_t or 0.0,
             to_plant_km=round(km, 2),
-            to_plant_min=round(km / 60 * 60, 1),
+            to_plant_min=round(mins, 1),
         ))
+
+    # Логистика — точно тот же расчёт что и в /route
+    thickness = LAYER_THICKNESS_THIN if site.layer_type.value == "thin" else LAYER_THICKNESS_STANDARD
+    rate_t_per_min = site.width_m * 2.5 * thickness * ASPHALT_DENSITY
+    eff_window = min((site.repair_hours or 72) * 60, 8 * 60)
+    haulers = [v for v in brigade if v.type.value in ("dump_truck", "transfer_machine")]
+    n_h = len(haulers)
+    avg_cap = (sum(v.capacity_t or 0 for v in haulers) / n_h) if n_h else 20.0
+    logistics_dict = calc_optimal_order(
+        rate_t_per_min=rate_t_per_min,
+        effective_paving_min=eff_window,
+        mix_temp_c=plant.mix_temp_c,
+        cool_rate=prep_dict["cool_rate"],
+        cool_rate_waiting=prep_dict.get("cool_rate_waiting", 0.2),
+        delivery_min=prep_dict["delivery_min"],
+        n_trucks=n_h,
+        truck_capacity_t=avg_cap,
+    )
 
     return AutoBrigadeResponse(
         road_id=site.id,
@@ -168,6 +269,7 @@ def auto_brigade(
         plant_name=plant.name,
         vehicles=out_vehicles,
         prep=PrepBreakdown(**prep_dict),
+        logistics=LogisticsPlan(**logistics_dict),
     )
 
 

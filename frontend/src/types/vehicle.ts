@@ -20,6 +20,7 @@ export interface VehicleSummary {
   home_id: number | string | null;
   capacity_t?: number;
   load_t?: number;
+  is_heated?: boolean;
 }
 
 export interface Vehicle extends VehicleSummary {

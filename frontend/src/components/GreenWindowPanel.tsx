@@ -27,6 +27,13 @@ const VEHICLE_LABEL: Record<string, string> = {
   closure_vehicle: 'Машина прикрытия',
 };
 
+const BOTTLENECK_LABEL: Record<string, string> = {
+  paver: 'Производительность укладчика',
+  demand: 'Объём дороги',
+  plant: 'Мощность АБЗ',
+  delivery: 'Доставка фурами',
+};
+
 function PrepTimeline({ start, prep }: { start: Date; prep: PrepInfo }) {
   // Подготовка: 3 сегмента. start — момент реального начала подготовки.
   const segments = [
@@ -168,7 +175,17 @@ function SlotCard({ slot, prep, roadTotalT }: { slot: TimeSlot; prep: PrepInfo |
       </div>
 
       <p className="text-xs text-gray-400 mb-1">{slot.start.slice(0, 10)}</p>
-      <p className="text-sm text-gray-600">Макс. тоннаж: <strong className="text-gray-900">{slot.max_tonnage_t.toFixed(1)} т</strong></p>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-2 mb-2">
+        <div className="flex items-baseline justify-between">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Оптимальный заказ</p>
+          <p className="text-[10px] text-gray-400">потенциал: {slot.max_tonnage_t.toFixed(0)} т</p>
+        </div>
+        <p className="text-2xl font-bold text-gray-900 leading-tight">{slot.optimal_tonnage_t.toFixed(1)} <span className="text-sm text-gray-500">т</span></p>
+        <p className="text-[10px] text-gray-500 mt-0.5">
+          Узкое место: <strong className="text-gray-700">{BOTTLENECK_LABEL[slot.bottleneck]}</strong>
+        </p>
+      </div>
 
       <EffectivePanel slot={slot} prep={prep} roadTotalT={roadTotalT} />
     </div>
@@ -180,7 +197,12 @@ function BrigadeRow({ m }: { m: BrigadeMember }) {
     <div className="flex items-center gap-2 py-1.5 px-2 bg-white rounded-md border border-gray-100">
       <span className="text-base shrink-0">{VEHICLE_ICON[m.type] ?? '🚗'}</span>
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold text-gray-800 truncate">{m.name}</p>
+        <p className="text-xs font-semibold text-gray-800 truncate flex items-center gap-1">
+          {m.name}
+          {m.is_heated && (
+            <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-1 rounded" title="Термокузов с подогревом">🔥</span>
+          )}
+        </p>
         <p className="text-[10px] text-gray-400">{VEHICLE_LABEL[m.type] ?? m.type}</p>
       </div>
       <div className="text-right shrink-0">
@@ -274,6 +296,81 @@ export default function GreenWindowPanel({ roadId, roadName, vehicleIds, onClose
                     <p className="text-xs text-indigo-700 font-semibold">Итого подготовка:</p>
                     <p className="text-base font-bold text-indigo-900">{fmtMin(prep.total_min)}</p>
                   </div>
+
+                  {prep.has_brigade && (
+                    <div className={`mt-2 rounded-lg border p-2 ${
+                      !prep.mix_usable
+                        ? 'bg-red-50 border-red-300'
+                        : !prep.mix_optimal
+                          ? 'bg-amber-50 border-amber-300'
+                          : 'bg-emerald-50 border-emerald-300'
+                    }`}>
+                      <div className="flex items-baseline justify-between">
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-gray-600">
+                          🌡 Температура смеси
+                        </p>
+                        <p className={`text-base font-bold ${
+                          !prep.mix_usable ? 'text-red-700'
+                            : !prep.mix_optimal ? 'text-amber-700'
+                              : 'text-emerald-700'
+                        }`}>
+                          {prep.mix_temp_arrival_c.toFixed(0)}°C
+                        </p>
+                      </div>
+                      <p className="text-[10px] text-gray-600 mt-0.5">
+                        {prep.mix_temp_start_c.toFixed(0)}°C на АБЗ
+                        {' '}→ −{(prep.cool_rate * prep.delivery_min).toFixed(0)}°C в пути ({fmtMin(prep.delivery_min)})
+                        {' '}→ −{(prep.cool_rate_waiting * prep.site_wait_min).toFixed(0)}°C ожидание ({prep.site_wait_min} мин)
+                      </p>
+                      {!prep.mix_usable && (
+                        <p className="text-[10px] text-red-700 font-semibold mt-1">
+                          ❌ Ниже 140°C — нельзя начинать уплотнение по ГОСТ. Нужен АБЗ ближе или фуры с подогревом.
+                        </p>
+                      )}
+                      {prep.mix_usable && !prep.mix_optimal && (
+                        <p className="text-[10px] text-amber-700 mt-1">
+                          ⚠ На грани 145°C — рекомендуется термокузов или ближний АБЗ.
+                        </p>
+                      )}
+
+                      <div className="mt-1.5 pt-1.5 border-t border-gray-200 grid grid-cols-2 gap-1 text-[10px] text-gray-700">
+                        <div>
+                          <span className="text-gray-400">Грузить от:</span>{' '}
+                          <strong className={prep.required_mix_temp_c > prep.mix_temp_start_c ? 'text-red-700' : 'text-gray-800'}>
+                            {prep.required_mix_temp_c.toFixed(0)}°C
+                          </strong>
+                          {prep.required_mix_temp_c > prep.mix_temp_start_c && (
+                            <span className="text-red-600 ml-1">⚠</span>
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-gray-400">АБЗ выдаёт:</span>{' '}
+                          <strong className="text-gray-800">{prep.mix_temp_start_c.toFixed(0)}°C</strong>
+                        </div>
+                      </div>
+
+                      <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-600 flex-wrap">
+                        <span>🔥 термо: {Math.round(prep.heated_share * 100)}%</span>
+                        <span>·</span>
+                        <span>в пути {prep.cool_rate.toFixed(2)} °C/мин</span>
+                        <span>·</span>
+                        <span>на участке {prep.cool_rate_waiting.toFixed(2)} °C/мин</span>
+                        {prep.air_temp_c !== null && (
+                          <>
+                            <span>·</span>
+                            <span>воздух {prep.air_temp_c.toFixed(0)}°C / {(prep.wind_ms ?? 0).toFixed(1)} м/с</span>
+                          </>
+                        )}
+                      </div>
+
+                      {prep.drying_min > 0 && (
+                        <p className="text-[10px] text-blue-700 mt-1 font-semibold">
+                          🌧 Просушка после дождя: +{fmtMin(prep.drying_min)} к подготовке
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {roadTotalT > 0 && (
                     <p className="text-[10px] text-indigo-700 mt-2">
                       На всю дорогу нужно <strong>{roadTotalT.toFixed(0)} т</strong> асфальта ({data.road_area_m2.toFixed(0)} м²)

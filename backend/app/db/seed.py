@@ -59,8 +59,13 @@ def _seed_parkings(db: Session) -> None:
 
 def _seed_sites_and_lanes(db: Session) -> None:
     raw = json.loads((_DATA / "roads.json").read_text())
+    known_plants = {p[0] for p in db.query(PlantORM.id).all()}
     for r in raw:
         lat, lon = _site_lat_lon(r)
+        plant_id = r.get("plant_id")
+        if plant_id and plant_id not in known_plants:
+            # FK на удалённый АБЗ — обнуляем, ближайший подберётся в /paving/route
+            plant_id = None
         site = SiteORM(
             id=r["id"],
             numeric_id=int(r.get("numeric_id", 0)),
@@ -73,7 +78,7 @@ def _seed_sites_and_lanes(db: Session) -> None:
             width_m=float(r["width_m"]),
             length_m=float(r["length_m"]),
             layer_type=LayerType(r.get("layer_type", "standard")),
-            plant_id=r.get("plant_id"),
+            plant_id=plant_id,
             delivery_time_min=int(r["delivery_time_min"]),
             repair_hours=int(r.get("repair_hours", 72)),
             weather_suitable=r.get("weather_suitable"),
@@ -116,6 +121,7 @@ def _seed_vehicles(db: Session) -> None:
             home_id=str(v["home_id"]) if v.get("home_id") is not None else None,
             capacity_t=capacity,
             load_t=float(v.get("load_t", 0.0)),
+            is_heated=bool(v.get("is_heated", False)),
             schedule=v.get("schedule", []),
         ))
 

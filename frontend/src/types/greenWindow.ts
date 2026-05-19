@@ -6,6 +6,8 @@ export interface TimeSlot {
   is_optimal: boolean;
   yellow_start: string;
   rate_t_per_min: number;
+  optimal_tonnage_t: number;
+  bottleneck: 'paver' | 'demand' | 'plant' | 'delivery';
 }
 
 export interface PrepInfo {
@@ -14,6 +16,18 @@ export interface PrepInfo {
   delivery_min: number;
   total_min: number;
   has_brigade: boolean;
+  mix_temp_start_c: number;
+  mix_temp_arrival_c: number;
+  mix_usable: boolean;
+  mix_optimal: boolean;
+  heated_share: number;
+  cool_rate: number;
+  cool_rate_waiting: number;
+  site_wait_min: number;
+  required_mix_temp_c: number;
+  drying_min: number;
+  air_temp_c: number | null;
+  wind_ms: number | null;
 }
 
 export interface BrigadeMember {
@@ -23,6 +37,7 @@ export interface BrigadeMember {
   to_plant_km: number;
   to_plant_min: number;
   capacity_t: number;
+  is_heated: boolean;
 }
 
 export interface GreenWindow {

@@ -116,7 +116,7 @@
     "width_m": 7.5,
     "length_m": 1000,
     "layer_type": "standard",
-    "plant_id": "abz_1_tver_dmitrovskoe",
+    "plant_id": "eas_asfalt_beton_solnechnogorsk",
     "delivery_time_min": 75,
     "repair_hours": 48
   },
@@ -144,7 +144,7 @@
     "width_m": 7.0,
     "length_m": 1000,
     "layer_type": "thin",
-    "plant_id": "abz_1_tver_dmitrovskoe",
+    "plant_id": "vysokovsky_avtodor_abz",
     "delivery_time_min": 100,
     "repair_hours": 96
   }
