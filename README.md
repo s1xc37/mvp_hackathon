@@ -125,11 +125,4 @@ frontend/
   package.json
 
 docker-compose.yml
-SUMMARY.md        # отчёт о готовности к хакатону
-CLAUDE.md         # инструкции для AI-ассистента
 ```
-
-## Документация
-
-- [SUMMARY.md](SUMMARY.md) — карта покрытия задач кейса, конкурентные плюсы, что не сделано.
-- [CLAUDE.md](CLAUDE.md) — правила для работы AI-ассистента над проектом.
